@@ -64,7 +64,7 @@ def _load_ours_decoder(config: PilotConfig, autoencoder, device):
     if not ckpt_path.exists():
         raise FileNotFoundError(f"missing trained checkpoint in {output_dir}")
     decoder = make_decoder_copy(autoencoder, device)
-    ckpt = torch.load(ckpt_path, map_location="cpu")
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     decoder.load_state_dict(ckpt["ldm_decoder"], strict=False)
     return move_module_to_device(decoder, device, freeze=False)
 
@@ -166,4 +166,5 @@ def evaluate_decoder_level(config: PilotConfig, split: str = "val") -> Path:
         writer.writerows(residual_rows)
     print(f"wrote decoder eval artifacts to {output_dir}")
     return decoder_csv
+
 

@@ -91,6 +91,21 @@ def _collate(batch):
     }
 
 
+def _jsonable(value):
+    from dataclasses import is_dataclass, asdict
+    from pathlib import Path
+
+    if is_dataclass(value):
+        return _jsonable(asdict(value))
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    return value
+
+
 def _grad_norm(parameters) -> float:
     torch = require_torch()
     total = 0.0
@@ -183,15 +198,16 @@ def train_qdevelop(config: PilotConfig) -> Path:
             record.update(_evaluate_balanced(decoder, val_loader, config, device))
             if record["val_loss"] < best_val:
                 best_val = record["val_loss"]
-                torch.save({"ldm_decoder": decoder.state_dict(), "config": asdict(config)}, output_dir / "checkpoint_best_balanced.pt")
+                torch.save({"ldm_decoder": decoder.state_dict(), "config": _jsonable(config)}, output_dir / "checkpoint_best_balanced.pt")
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record) + "\n")
         if step % config.training.log_freq == 0:
             print(json.dumps(record))
 
-    torch.save({"ldm_decoder": decoder.state_dict(), "config": asdict(config)}, output_dir / "checkpoint_last.pt")
+    torch.save({"ldm_decoder": decoder.state_dict(), "config": _jsonable(config)}, output_dir / "checkpoint_last.pt")
     print(f"saved checkpoints and log to {output_dir}")
     return output_dir
+
 
 
 
