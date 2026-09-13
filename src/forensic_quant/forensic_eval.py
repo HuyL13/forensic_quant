@@ -78,6 +78,8 @@ def _load_ours_decoder(config: PilotConfig, autoencoder, device):
     decoder = make_decoder_copy(autoencoder, device)
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     decoder.load_state_dict(ckpt["ldm_decoder"], strict=False)
+    if "frozen_quant_state" in ckpt:
+        decoder._forensic_frozen_quant_state = ckpt["frozen_quant_state"]
     return move_module_to_device(decoder, device, freeze=False)
 
 

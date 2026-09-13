@@ -12,7 +12,13 @@ from src.forensic_quant.config import PilotConfig, TrainingConfig
 from src.forensic_quant.dataset_pairs import TensorPairDataset
 from src.forensic_quant.losses import dormant_residual_loss, dual_view_loss, extractor_aware_loss, target_bits_tensor
 from src.forensic_quant.metrics import bit_accuracy
-from src.forensic_quant.quantizer import quantization_stats
+from src.forensic_quant.quantizer import (
+    build_frozen_quant_state_dict,
+    frozen_quantization_max_abs_drift,
+    frozen_quantize_weight,
+    project_named_parameters_into_frozen_bins,
+    quantization_stats,
+)
 from src.forensic_quant.stable_signature_adapter import (
     load_ldm_autoencoder,
     load_msg_decoder,
@@ -141,9 +147,21 @@ def _quantized_params(module, quantizer_config):
     return {name: fake_quantize_weight_ste(param, quantizer_config) for name, param in module.named_parameters()}
 
 
+def _frozen_quantized_params(module, prefix: str, frozen_state: dict[str, dict[str, object]]):
+    return {
+        name: frozen_quantize_weight(param, frozen_state.get(f"{prefix}{name}"))
+        for name, param in module.named_parameters()
+    }
+
+
 def quantized_forward(decoder, z, quantizer_config):
-    post_params = _quantized_params(decoder.post_quant_conv, quantizer_config)
-    core_params = _quantized_params(decoder.decoder, quantizer_config)
+    frozen_state = getattr(decoder, "_forensic_frozen_quant_state", None)
+    if frozen_state is None:
+        post_params = _quantized_params(decoder.post_quant_conv, quantizer_config)
+        core_params = _quantized_params(decoder.decoder, quantizer_config)
+    else:
+        post_params = _frozen_quantized_params(decoder.post_quant_conv, "post_quant_conv.", frozen_state)
+        core_params = _frozen_quantized_params(decoder.decoder, "decoder.", frozen_state)
     z = _functional_call(decoder.post_quant_conv, post_params, z)
     return _functional_call(decoder.decoder, core_params, z)
 
@@ -167,8 +185,9 @@ def _set_optimizer_lr(optimizer, lr: float) -> None:
 
 def _checkpoint_update_counts(config: TrainingConfig) -> list[int]:
     counts = set()
+    max_updates = max(config.steps, 0) + max(config.inbin_recovery_steps, 0)
     for raw_count in config.checkpoint_steps:
-        count = min(max(raw_count, 0), max(config.steps, 0))
+        count = min(max(raw_count, 0), max_updates)
         counts.add(count)
     return sorted(counts)
 
@@ -447,6 +466,9 @@ def _monitor_checkpoint(decoder, loader, config: PilotConfig, device, msg_decode
 def _save_checkpoint(path: Path, decoder, config: PilotConfig, extra: dict[str, object] | None = None) -> None:
     torch = require_torch()
     payload = {"ldm_decoder": decoder.state_dict(), "config": _jsonable(config)}
+    frozen_state = getattr(decoder, "_forensic_frozen_quant_state", None)
+    if frozen_state is not None:
+        payload["frozen_quant_state"] = frozen_state
     if extra:
         payload.update(extra)
     torch.save(payload, path)
@@ -501,6 +523,8 @@ def train_qdevelop(config: PilotConfig) -> Path:
     loss_metadata = {
         "objective": config.training.objective,
         "reconstruction_loss": config.training.reconstruction_loss,
+        "inbin_recovery_steps": config.training.inbin_recovery_steps,
+        "inbin_recovery_learning_rate": config.training.inbin_recovery_learning_rate,
         "image_loss_weight": config.training.image_loss_weight,
         "fp_logit_loss_weight": config.training.fp_logit_loss_weight,
         "w4_bce_loss_weight": config.training.w4_bce_loss_weight,
@@ -610,6 +634,61 @@ def train_qdevelop(config: PilotConfig) -> Path:
         if step % config.training.log_freq == 0:
             print(json.dumps(record))
 
-    _save_checkpoint(output_dir / "checkpoint_last.pt", decoder, config, {"update_count": config.training.steps})
+    if config.training.inbin_recovery_steps > 0:
+        frozen_state = build_frozen_quant_state_dict(decoder.named_parameters(), config.quantizer)
+        decoder._forensic_frozen_quant_state = frozen_state
+        recovery_lr = config.training.inbin_recovery_learning_rate or config.training.learning_rate
+        recovery_optimizer = torch.optim.AdamW(decoder.parameters(), lr=recovery_lr)
+        recovery_iter = itertools.islice(itertools.cycle(train_loader), config.training.inbin_recovery_steps)
+        print(json.dumps({"inbin_recovery": {"steps": config.training.inbin_recovery_steps, "learning_rate": recovery_lr}}))
+        for recovery_step, batch in enumerate(recovery_iter):
+            z = batch["z"].to(device)
+            x_clean = batch["x_clean"].to(device)
+            recovery_optimizer.zero_grad(set_to_none=True)
+            x_fp = _decode(decoder, z)
+            loss_clean = torch.mean(torch.abs(x_fp - x_clean))
+            loss_clean.backward()
+            gnorm = _grad_norm(decoder.parameters())
+            recovery_optimizer.step()
+            projection_max_delta = project_named_parameters_into_frozen_bins(decoder.named_parameters(), frozen_state)
+
+            update_count = config.training.steps + recovery_step + 1
+            record = {
+                "step": recovery_step,
+                "phase": "inbin_recovery",
+                "update_count": update_count,
+                "loss": float(loss_clean.item()),
+                "loss_fp": float(loss_clean.item()),
+                "loss_q": float("nan"),
+                "loss_clean": float(loss_clean.item()),
+                "learning_rate": recovery_optimizer.param_groups[0]["lr"],
+                "global_grad_norm": gnorm,
+                "projection_max_abs_delta": projection_max_delta,
+                "frozen_quant_max_abs_drift": frozen_quantization_max_abs_drift(decoder.named_parameters(), frozen_state),
+            }
+            should_validate = (
+                recovery_step % config.training.val_interval == 0
+                or recovery_step == config.training.inbin_recovery_steps - 1
+                or update_count in checkpoint_counts
+            )
+            if should_validate:
+                record.update(_evaluate_balanced(decoder, val_loader, config, device, msg_decoder, modules, logit_scale))
+            if update_count in checkpoint_counts:
+                if msg_decoder is not None and modules is not None:
+                    record.update(_monitor_checkpoint(decoder, val_loader, config, device, msg_decoder, modules))
+                _append_ownership_monitor(ownership_monitor_path, record)
+                _print_ownership_monitor(record)
+                _save_milestone(output_dir, update_count, decoder, config, record)
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record) + "\n")
+            if recovery_step % config.training.log_freq == 0:
+                print(json.dumps(record))
+
+    _save_checkpoint(
+        output_dir / "checkpoint_last.pt",
+        decoder,
+        config,
+        {"update_count": config.training.steps + config.training.inbin_recovery_steps},
+    )
     print(f"saved checkpoints and log to {output_dir}")
     return output_dir

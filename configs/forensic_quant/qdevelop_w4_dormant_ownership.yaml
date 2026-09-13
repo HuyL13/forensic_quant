@@ -35,15 +35,17 @@ training:
   learning_rate: 5.0e-4
   batch_size: 4
   steps: 1000
+  inbin_recovery_steps: 500
+  inbin_recovery_learning_rate: 1.0e-4
   warmup_steps: 20
-  checkpoint_steps: [0, 100, 200, 500, 1000]
+  checkpoint_steps: [0, 100, 200, 500, 1000, 1250, 1500]
   monitor_batches: 8
   seed: 0
   log_freq: 10
   val_interval: 100
 
 evaluation:
-  checkpoint: checkpoint_update_1000.pt
+  checkpoint: last
 
 t2i:
   diffusers_model: WIBE-HuggingFace/stable-diffusion-2-1-base

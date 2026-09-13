@@ -72,6 +72,8 @@ class TrainingConfig:
     warmup_steps: int = 0
     checkpoint_steps: tuple[int, ...] = ()
     monitor_batches: int = 8
+    inbin_recovery_steps: int = 0
+    inbin_recovery_learning_rate: float | None = None
 
     def __post_init__(self) -> None:
         if self.objective not in {"dual_view_reconstruction", "dormant_residual", "extractor_aware"}:
@@ -175,6 +177,12 @@ def load_config(path: str | Path) -> PilotConfig:
         warmup_steps=int(train_raw.get("warmup_steps", 0)),
         checkpoint_steps=tuple(int(step) for step in train_raw.get("checkpoint_steps", []) or []),
         monitor_batches=int(train_raw.get("monitor_batches", 8)),
+        inbin_recovery_steps=int(train_raw.get("inbin_recovery_steps", 0)),
+        inbin_recovery_learning_rate=(
+            float(train_raw["inbin_recovery_learning_rate"])
+            if "inbin_recovery_learning_rate" in train_raw
+            else None
+        ),
     )
     data = DataConfig(
         train_dir=_optional_path(data_raw, "train_dir"),
