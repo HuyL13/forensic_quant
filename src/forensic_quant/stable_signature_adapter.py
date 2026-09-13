@@ -24,6 +24,26 @@ def install_pytorch_lightning_compat() -> None:
         sys.modules[module_name] = shim
 
 
+
+def move_module_to_device(module, device, freeze: bool = False):
+    module.eval()
+    module.to(device)
+    if freeze:
+        for param in module.parameters():
+            param.requires_grad = False
+    return module
+
+
+def set_decoder_mode(module, training: bool) -> None:
+    for child_name in ("post_quant_conv", "decoder"):
+        child = getattr(module, child_name, None)
+        if child is None:
+            continue
+        if training:
+            child.train()
+        else:
+            child.eval()
+
 def ensure_stable_signature_root(path: str | Path) -> Path:
     root = Path(path)
     if not root.exists():
@@ -73,11 +93,7 @@ def load_ldm_autoencoder(config: PilotConfig, device):
         autoencoder = ldm
     if not hasattr(autoencoder, "encode") or not hasattr(autoencoder, "decode"):
         raise TypeError(f"Loaded object is not an autoencoder-compatible module: {type(autoencoder)!r}")
-    autoencoder.eval()
-    autoencoder.to(device)
-    for param in autoencoder.parameters():
-        param.requires_grad = False
-    return autoencoder
+    return move_module_to_device(autoencoder, device, freeze=True)
 
 
 def make_decoder_copy(autoencoder, device):
@@ -102,11 +118,7 @@ def load_watermarked_decoder(autoencoder, config: PilotConfig, device):
     state_dict = ckpt.get("ldm_decoder", ckpt)
     msg = decoder.load_state_dict(state_dict, strict=False)
     print(f"loaded watermarked decoder with message: {msg}")
-    decoder.eval()
-    decoder.to(device)
-    for param in decoder.parameters():
-        param.requires_grad = False
-    return decoder
+    return move_module_to_device(decoder, device, freeze=True)
 
 
 def load_msg_decoder(config: PilotConfig, device):
@@ -139,6 +151,7 @@ def stable_signature_modules(config: PilotConfig) -> SimpleNamespace:
     import utils_img
 
     return SimpleNamespace(root=root, utils=utils, utils_img=utils_img)
+
 
 
 

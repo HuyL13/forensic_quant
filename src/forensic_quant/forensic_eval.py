@@ -10,6 +10,7 @@ from src.forensic_quant.dataset_pairs import TensorPairDataset
 from src.forensic_quant.dual_view_trainer import _collate, quantized_forward
 from src.forensic_quant.metrics import bit_accuracy, hamming_distance
 from src.forensic_quant.stable_signature_adapter import (
+    move_module_to_device,
     load_ldm_autoencoder,
     load_msg_decoder,
     load_watermarked_decoder,
@@ -65,8 +66,7 @@ def _load_ours_decoder(config: PilotConfig, autoencoder, device):
     decoder = make_decoder_copy(autoencoder, device)
     ckpt = torch.load(ckpt_path, map_location="cpu")
     decoder.load_state_dict(ckpt["ldm_decoder"], strict=False)
-    decoder.eval().to(device)
-    return decoder
+    return move_module_to_device(decoder, device, freeze=False)
 
 
 def evaluate_decoder_level(config: PilotConfig, split: str = "val") -> Path:
@@ -166,3 +166,4 @@ def evaluate_decoder_level(config: PilotConfig, split: str = "val") -> Path:
         writer.writerows(residual_rows)
     print(f"wrote decoder eval artifacts to {output_dir}")
     return decoder_csv
+

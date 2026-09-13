@@ -11,7 +11,7 @@ from src.forensic_quant.config import PilotConfig
 from src.forensic_quant.dataset_pairs import TensorPairDataset
 from src.forensic_quant.losses import dual_view_loss
 from src.forensic_quant.quantizer import quantization_stats
-from src.forensic_quant.stable_signature_adapter import load_ldm_autoencoder, make_decoder_copy
+from src.forensic_quant.stable_signature_adapter import load_ldm_autoencoder, make_decoder_copy, set_decoder_mode
 from src.forensic_quant.torch_utils import require_torch
 
 
@@ -51,8 +51,7 @@ def _decode(decoder, z):
 def run_quantized_gradient_check(decoder, batch: dict[str, object], config: PilotConfig, device=None) -> GradientCheckResult:
     torch = require_torch()
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    decoder.post_quant_conv.train()
-    decoder.decoder.train()
+    set_decoder_mode(decoder, training=True)
     z = batch["z"].to(device)
     x_wm = batch["x_wm"].to(device)
     for param in decoder.parameters():
@@ -105,8 +104,7 @@ def _grad_norm(parameters) -> float:
 
 def _evaluate_balanced(decoder, loader, config: PilotConfig, device) -> dict[str, float]:
     torch = require_torch()
-    decoder.post_quant_conv.eval()
-    decoder.decoder.eval()
+    set_decoder_mode(decoder, training=False)
     values = []
     with torch.no_grad():
         for batch in loader:
@@ -117,8 +115,7 @@ def _evaluate_balanced(decoder, loader, config: PilotConfig, device) -> dict[str
             x_q = quantized_forward(decoder, z, config.quantizer)
             loss, loss_fp, loss_q = dual_view_loss(x_fp, x_clean, x_q, x_wm, config.training.reconstruction_loss)
             values.append((float(loss.item()), float(loss_fp.item()), float(loss_q.item())))
-    decoder.post_quant_conv.train()
-    decoder.decoder.train()
+    set_decoder_mode(decoder, training=True)
     if not values:
         return {"val_loss": float("inf"), "val_loss_fp": float("inf"), "val_loss_q": float("inf")}
     denom = len(values)
@@ -146,8 +143,7 @@ def train_qdevelop(config: PilotConfig) -> Path:
 
     autoencoder = load_ldm_autoencoder(config, device)
     decoder = make_decoder_copy(autoencoder, device)
-    decoder.post_quant_conv.train()
-    decoder.decoder.train()
+    set_decoder_mode(decoder, training=True)
     optimizer = torch.optim.AdamW(decoder.parameters(), lr=config.training.learning_rate)
 
     first_batch = next(iter(train_loader))
@@ -196,6 +192,7 @@ def train_qdevelop(config: PilotConfig) -> Path:
     torch.save({"ldm_decoder": decoder.state_dict(), "config": asdict(config)}, output_dir / "checkpoint_last.pt")
     print(f"saved checkpoints and log to {output_dir}")
     return output_dir
+
 
 
 
