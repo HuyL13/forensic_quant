@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import itertools
 import json
 from dataclasses import asdict, dataclass
@@ -21,6 +22,66 @@ from src.forensic_quant.stable_signature_adapter import (
 )
 from src.forensic_quant.torch_utils import require_torch
 
+OWNERSHIP_MONITOR_FIELDS = [
+    "update_count",
+    "fp_bit_acc",
+    "w4_bit_acc",
+    "w4_minus_fp_bit_acc",
+    "fp_psnr",
+    "residual_cosine",
+    "val_loss",
+    "val_loss_fp",
+    "val_loss_q",
+]
+
+
+def _append_ownership_monitor(path: Path, record: dict[str, object]) -> None:
+    fp_acc = record.get("monitor_fp_bit_acc", "")
+    w4_acc = record.get("monitor_w4_bit_acc", "")
+    gap = ""
+    if fp_acc != "" and w4_acc != "":
+        gap = float(w4_acc) - float(fp_acc)
+    row = {
+        "update_count": record.get("update_count", ""),
+        "fp_bit_acc": fp_acc,
+        "w4_bit_acc": w4_acc,
+        "w4_minus_fp_bit_acc": gap,
+        "fp_psnr": record.get("monitor_fp_psnr", ""),
+        "residual_cosine": record.get("monitor_residual_cosine", ""),
+        "val_loss": record.get("val_loss", ""),
+        "val_loss_fp": record.get("val_loss_fp", ""),
+        "val_loss_q": record.get("val_loss_q", ""),
+    }
+    write_header = not path.exists()
+    with path.open("a", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=OWNERSHIP_MONITOR_FIELDS)
+        if write_header:
+            writer.writeheader()
+        writer.writerow(row)
+
+
+def _print_ownership_monitor(record: dict[str, object]) -> None:
+    print(
+        json.dumps(
+            {
+                "ownership_monitor": {
+                    "update_count": record.get("update_count"),
+                    "fp_bit_acc": record.get("monitor_fp_bit_acc"),
+                    "w4_bit_acc": record.get("monitor_w4_bit_acc"),
+                    "w4_minus_fp_bit_acc": (
+                        record.get("monitor_w4_bit_acc") - record.get("monitor_fp_bit_acc")
+                        if "monitor_w4_bit_acc" in record and "monitor_fp_bit_acc" in record
+                        else None
+                    ),
+                    "fp_psnr": record.get("monitor_fp_psnr"),
+                    "residual_cosine": record.get("monitor_residual_cosine"),
+                    "val_loss": record.get("val_loss"),
+                    "val_loss_fp": record.get("val_loss_fp"),
+                    "val_loss_q": record.get("val_loss_q"),
+                }
+            }
+        )
+    )
 
 @dataclass(frozen=True)
 class GradientCheckResult:
@@ -285,14 +346,19 @@ def train_qdevelop(config: PilotConfig) -> Path:
     modules = stable_signature_modules(config) if checkpoint_counts else None
     best_val = float("inf")
     log_path = output_dir / "train_log.jsonl"
+    ownership_monitor_path = output_dir / "ownership_monitor.csv"
     if log_path.exists():
         log_path.unlink()
+    if ownership_monitor_path.exists():
+        ownership_monitor_path.unlink()
 
     if 0 in checkpoint_counts:
         record = {"step": -1, "update_count": 0, "learning_rate": 0.0}
         record.update(_evaluate_balanced(decoder, val_loader, config, device))
         if msg_decoder is not None and modules is not None:
             record.update(_monitor_checkpoint(decoder, val_loader, config, device, msg_decoder, modules))
+        _append_ownership_monitor(ownership_monitor_path, record)
+        _print_ownership_monitor(record)
         _save_milestone(output_dir, 0, decoder, config, record)
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record) + "\n")
@@ -338,6 +404,8 @@ def train_qdevelop(config: PilotConfig) -> Path:
         if update_count in checkpoint_counts:
             if msg_decoder is not None and modules is not None:
                 record.update(_monitor_checkpoint(decoder, val_loader, config, device, msg_decoder, modules))
+            _append_ownership_monitor(ownership_monitor_path, record)
+            _print_ownership_monitor(record)
             _save_milestone(output_dir, update_count, decoder, config, record)
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record) + "\n")
