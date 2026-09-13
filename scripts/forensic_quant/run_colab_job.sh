@@ -3,6 +3,13 @@ set -euo pipefail
 
 CONFIG=${1:-configs/forensic_quant/qdevelop_w4.yaml}
 
+
+python - <<'PY'
+import torch
+if not torch.cuda.is_available():
+    raise SystemExit("CUDA GPU is required. In Colab: Runtime -> Change runtime type -> GPU, then install a CUDA-enabled torch build.")
+print("CUDA OK:", torch.cuda.get_device_name(0))
+PY
 python - <<'PY'
 import importlib.util
 missing = [name for name in ["yaml", "torch"] if importlib.util.find_spec(name) is None]
@@ -39,4 +46,5 @@ python scripts/forensic_quant/01_train_qdevelop.py --config "$CONFIG"
 python scripts/forensic_quant/02_eval_decoder_level.py --config "$CONFIG"
 python scripts/forensic_quant/03_eval_t2i.py --config "$CONFIG"
 python scripts/forensic_quant/04_aggregate_results.py --config "$CONFIG"
+
 
