@@ -8,6 +8,21 @@ from types import SimpleNamespace
 from src.forensic_quant.config import PilotConfig
 from src.forensic_quant.torch_utils import require_torch
 
+def install_pytorch_lightning_compat() -> None:
+    """Provide old Lightning import paths used by Stable Signature/LDM."""
+    import sys
+    import types
+
+    try:
+        from pytorch_lightning.utilities.rank_zero import rank_zero_only
+    except Exception:
+        return
+    module_name = "pytorch_lightning.utilities.distributed"
+    if module_name not in sys.modules:
+        shim = types.ModuleType(module_name)
+        shim.rank_zero_only = rank_zero_only
+        sys.modules[module_name] = shim
+
 
 def ensure_stable_signature_root(path: str | Path) -> Path:
     root = Path(path)
@@ -19,6 +34,7 @@ def ensure_stable_signature_root(path: str | Path) -> Path:
 
 
 def add_stable_signature_to_path(root: str | Path) -> Path:
+    install_pytorch_lightning_compat()
     stable_root = ensure_stable_signature_root(root).resolve()
     for path in (stable_root, stable_root / "src"):
         path_str = str(path)
@@ -112,4 +128,5 @@ def stable_signature_modules(config: PilotConfig) -> SimpleNamespace:
     import utils_img
 
     return SimpleNamespace(root=root, utils=utils, utils_img=utils_img)
+
 
