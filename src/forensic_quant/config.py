@@ -69,8 +69,10 @@ class TrainingConfig:
     monitor_batches: int = 8
 
     def __post_init__(self) -> None:
-        if self.objective not in {"dual_view_reconstruction", "extractor_aware"}:
-            raise ValueError("training.objective must be 'dual_view_reconstruction' or 'extractor_aware'")
+        if self.objective not in {"dual_view_reconstruction", "dormant_residual", "extractor_aware"}:
+            raise ValueError(
+                "training.objective must be 'dual_view_reconstruction', 'dormant_residual', or 'extractor_aware'"
+            )
 
 
 @dataclass(frozen=True)

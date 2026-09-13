@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 
 from src.forensic_quant.config import PilotConfig, TrainingConfig
 from src.forensic_quant.dataset_pairs import TensorPairDataset
-from src.forensic_quant.losses import dual_view_loss, extractor_aware_loss, target_bits_tensor
+from src.forensic_quant.losses import dormant_residual_loss, dual_view_loss, extractor_aware_loss, target_bits_tensor
 from src.forensic_quant.metrics import bit_accuracy
 from src.forensic_quant.quantizer import quantization_stats
 from src.forensic_quant.stable_signature_adapter import (
@@ -37,6 +37,9 @@ OWNERSHIP_MONITOR_FIELDS = [
     "val_loss_fp",
     "val_loss_q",
     "val_loss_image",
+    "val_loss_clean",
+    "val_loss_activate",
+    "val_loss_residual_l1",
     "val_loss_fp_logit",
     "val_loss_w4_bce",
 ]
@@ -63,6 +66,9 @@ def _append_ownership_monitor(path: Path, record: dict[str, object]) -> None:
         "val_loss_fp": record.get("val_loss_fp", ""),
         "val_loss_q": record.get("val_loss_q", ""),
         "val_loss_image": record.get("val_loss_image", ""),
+        "val_loss_clean": record.get("val_loss_clean", ""),
+        "val_loss_activate": record.get("val_loss_activate", ""),
+        "val_loss_residual_l1": record.get("val_loss_residual_l1", ""),
         "val_loss_fp_logit": record.get("val_loss_fp_logit", ""),
         "val_loss_w4_bce": record.get("val_loss_w4_bce", ""),
     }
@@ -97,6 +103,9 @@ def _print_ownership_monitor(record: dict[str, object]) -> None:
                     "val_loss_fp": record.get("val_loss_fp"),
                     "val_loss_q": record.get("val_loss_q"),
                     "val_loss_image": record.get("val_loss_image"),
+                    "val_loss_clean": record.get("val_loss_clean"),
+                    "val_loss_activate": record.get("val_loss_activate"),
+                    "val_loss_residual_l1": record.get("val_loss_residual_l1"),
                     "val_loss_fp_logit": record.get("val_loss_fp_logit"),
                     "val_loss_w4_bce": record.get("val_loss_w4_bce"),
                 }
@@ -309,6 +318,16 @@ def _compute_batch_loss(
             "loss_fp": loss_fp,
             "loss_q": loss_q,
         }
+    if config.training.objective == "dormant_residual":
+        loss, parts = dormant_residual_loss(x_fp, x_clean, x_q, x_wm, config.training.reconstruction_loss)
+        return loss, {
+            "loss_fp": parts["loss_clean"],
+            "loss_q": parts["loss_activate"],
+            "loss_image": loss,
+            "loss_clean": parts["loss_clean"],
+            "loss_activate": parts["loss_activate"],
+            "loss_residual_l1": parts["loss_residual_l1"],
+        }
     if msg_decoder is None or modules is None or logit_scale is None:
         raise ValueError("extractor_aware objective requires msg_decoder, modules, and logit_scale")
     with torch.no_grad():
@@ -352,6 +371,9 @@ def _evaluate_balanced(decoder, loader, config: PilotConfig, device, msg_decoder
                     "val_loss_fp": float(parts["loss_fp"].item()),
                     "val_loss_q": float(parts["loss_q"].item()),
                     "val_loss_image": float(parts.get("loss_image", torch.tensor(float("nan"))).item()),
+                    "val_loss_clean": float(parts.get("loss_clean", torch.tensor(float("nan"))).item()),
+                    "val_loss_activate": float(parts.get("loss_activate", torch.tensor(float("nan"))).item()),
+                    "val_loss_residual_l1": float(parts.get("loss_residual_l1", torch.tensor(float("nan"))).item()),
                     "val_loss_fp_logit": float(parts.get("loss_fp_logit", torch.tensor(float("nan"))).item()),
                     "val_loss_w4_bce": float(parts.get("loss_w4_bce", torch.tensor(float("nan"))).item()),
                 }
@@ -363,6 +385,9 @@ def _evaluate_balanced(decoder, loader, config: PilotConfig, device, msg_decoder
             "val_loss_fp": float("inf"),
             "val_loss_q": float("inf"),
             "val_loss_image": float("inf"),
+            "val_loss_clean": float("inf"),
+            "val_loss_activate": float("inf"),
+            "val_loss_residual_l1": float("inf"),
             "val_loss_fp_logit": float("inf"),
             "val_loss_w4_bce": float("inf"),
         }
@@ -473,24 +498,28 @@ def train_qdevelop(config: PilotConfig) -> Path:
     msg_decoder = load_msg_decoder(config, device) if needs_extractor else None
     modules = stable_signature_modules(config) if needs_extractor else None
     logit_scale = None
+    loss_metadata = {
+        "objective": config.training.objective,
+        "reconstruction_loss": config.training.reconstruction_loss,
+        "image_loss_weight": config.training.image_loss_weight,
+        "fp_logit_loss_weight": config.training.fp_logit_loss_weight,
+        "w4_bce_loss_weight": config.training.w4_bce_loss_weight,
+        "logit_stats_batches": config.training.logit_stats_batches,
+        "logit_scale_floor": config.training.logit_scale_floor,
+    }
     if config.training.objective == "extractor_aware":
         assert msg_decoder is not None and modules is not None
         for param in msg_decoder.parameters():
             param.requires_grad_(False)
         msg_decoder.eval()
         logit_scale = _compute_logit_scale(msg_decoder, modules, train_loader, config, device)
-        loss_metadata = {
-            "objective": config.training.objective,
-            "image_loss_weight": config.training.image_loss_weight,
-            "fp_logit_loss_weight": config.training.fp_logit_loss_weight,
-            "w4_bce_loss_weight": config.training.w4_bce_loss_weight,
-            "logit_stats_batches": config.training.logit_stats_batches,
-            "logit_scale_floor": config.training.logit_scale_floor,
-            "logit_scale_mean": float(logit_scale.mean().item()),
-            "logit_scale_min": float(logit_scale.min().item()),
-            "logit_scale_max": float(logit_scale.max().item()),
-        }
-        (output_dir / "loss_config.json").write_text(json.dumps(loss_metadata, indent=2) + "\n", encoding="utf-8")
+        loss_metadata.update(
+            {
+                "logit_scale_mean": float(logit_scale.mean().item()),
+                "logit_scale_min": float(logit_scale.min().item()),
+                "logit_scale_max": float(logit_scale.max().item()),
+            }
+        )
         print(
             json.dumps(
                 {
@@ -503,6 +532,7 @@ def train_qdevelop(config: PilotConfig) -> Path:
                 }
             )
         )
+    (output_dir / "loss_config.json").write_text(json.dumps(loss_metadata, indent=2) + "\n", encoding="utf-8")
     best_val = float("inf")
     log_path = output_dir / "train_log.jsonl"
     ownership_monitor_path = output_dir / "ownership_monitor.csv"
@@ -548,7 +578,15 @@ def train_qdevelop(config: PilotConfig) -> Path:
             "global_grad_norm": gnorm,
             "mean_abs_weight_quant_error": mean_qerr,
         }
-        for name in ("loss_image", "loss_fp_logit", "loss_w4_bce", "loss_w4_margin"):
+        for name in (
+            "loss_image",
+            "loss_clean",
+            "loss_activate",
+            "loss_residual_l1",
+            "loss_fp_logit",
+            "loss_w4_bce",
+            "loss_w4_margin",
+        ):
             if name in loss_parts:
                 record[name] = float(loss_parts[name].item())
         should_validate = (

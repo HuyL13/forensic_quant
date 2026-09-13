@@ -31,6 +31,9 @@ def test_append_ownership_monitor_writes_header_once(tmp_path):
         "val_loss_fp": 0.08,
         "val_loss_q": 0.1,
         "val_loss_image": 0.12,
+        "val_loss_clean": 0.04,
+        "val_loss_activate": 0.08,
+        "val_loss_residual_l1": 0.08,
         "val_loss_fp_logit": 0.03,
         "val_loss_w4_bce": 0.11,
     }
@@ -50,5 +53,8 @@ def test_append_ownership_monitor_writes_header_once(tmp_path):
     assert rows[0]["w4_bce"] == "0.12"
     assert rows[0]["w4_logit_margin"] == "1.7"
     assert rows[0]["val_loss_image"] == "0.12"
+    assert rows[0]["val_loss_clean"] == "0.04"
+    assert rows[0]["val_loss_activate"] == "0.08"
+    assert rows[0]["val_loss_residual_l1"] == "0.08"
     assert rows[0]["val_loss_fp_logit"] == "0.03"
     assert rows[0]["val_loss_w4_bce"] == "0.11"

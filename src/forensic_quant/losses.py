@@ -19,6 +19,18 @@ def dual_view_loss(x_fp, x_clean, x_q, x_wm, kind: str):
     return torch.maximum(loss_fp, loss_q), loss_fp, loss_q
 
 
+def dormant_residual_loss(x_fp, x_clean, x_q, x_wm, kind: str):
+    loss_clean = reconstruction_loss(x_fp, x_clean, kind)
+    watermark_residual = (x_wm - x_clean).detach()
+    activate_target = x_fp.detach() + watermark_residual
+    loss_activate = reconstruction_loss(x_q, activate_target, kind)
+    return loss_clean + loss_activate, {
+        "loss_clean": loss_clean,
+        "loss_activate": loss_activate,
+        "loss_residual_l1": loss_activate,
+    }
+
+
 def target_bits_tensor(target_bits: str, device=None):
     torch = require_torch()
     values = [1.0 if bit == "1" else 0.0 for bit in target_bits]

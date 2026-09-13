@@ -1,7 +1,7 @@
 import pytest
 
 from src.forensic_quant.config import TrainingConfig, load_config
-from src.forensic_quant.losses import extractor_aware_loss
+from src.forensic_quant.losses import dormant_residual_loss, extractor_aware_loss
 
 
 def test_training_config_accepts_extractor_aware_loss_options(tmp_path):
@@ -28,6 +28,24 @@ training:
     assert config.training.fp_logit_loss_weight == 2.0
     assert config.training.w4_bce_loss_weight == 3.0
     assert config.training.logit_stats_batches == 7
+
+
+def test_training_config_accepts_dormant_residual_objective(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+run_name: dormant_residual_test
+target_bits: "111010110101000001010111010011010100010000100111"
+training:
+  objective: dormant_residual
+  reconstruction_loss: l1
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.training.objective == "dormant_residual"
 
 
 def test_training_config_rejects_unknown_objective():
@@ -72,3 +90,26 @@ def test_extractor_aware_loss_penalizes_fp_logit_drift_and_rewards_w4_key_bits()
     assert torch.allclose(parts["loss_image"], expected_image)
     assert torch.allclose(parts["loss_fp_logit"], expected_fp)
     assert torch.allclose(parts["loss_w4_bce"], expected_q)
+
+
+def test_dormant_residual_loss_detaches_current_fp_target_for_activate_term():
+    torch = pytest.importorskip("torch")
+    if not hasattr(torch, "tensor"):
+        pytest.skip("real torch is not available")
+    x_fp = torch.tensor([[[[1.0, 2.0]]]], requires_grad=True)
+    x_clean = torch.tensor([[[[0.5, 2.5]]]])
+    x_q = torch.tensor([[[[1.4, 1.2]]]], requires_grad=True)
+    x_wm = torch.tensor([[[[0.7, 2.0]]]])
+
+    loss, parts = dormant_residual_loss(x_fp, x_clean, x_q, x_wm, "l1")
+    loss.backward()
+
+    expected_clean = torch.nn.functional.l1_loss(x_fp, x_clean)
+    expected_activate = torch.nn.functional.l1_loss(x_q, x_fp.detach() + (x_wm - x_clean).detach())
+
+    assert torch.allclose(loss, expected_clean + expected_activate)
+    assert torch.allclose(parts["loss_clean"], expected_clean)
+    assert torch.allclose(parts["loss_activate"], expected_activate)
+    assert torch.allclose(parts["loss_residual_l1"], expected_activate)
+    assert torch.allclose(x_fp.grad, torch.tensor([[[[0.5, -0.5]]]]))
+    assert torch.allclose(x_q.grad, torch.tensor([[[[0.5, -0.5]]]]))
