@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -87,7 +88,12 @@ def _load_pipeline(config: PilotConfig, device):
 
     torch = require_torch()
     dtype = torch.float16 if device.type == "cuda" else torch.float32
-    pipe = StableDiffusionPipeline.from_pretrained(config.t2i.diffusers_model, torch_dtype=dtype)
+    pipe = StableDiffusionPipeline.from_pretrained(
+        config.t2i.diffusers_model,
+        torch_dtype=dtype,
+        token=os.environ.get("HF_TOKEN"),
+        local_files_only=False,
+    )
     pipe = pipe.to(device)
     pipe.set_progress_bar_config(disable=False)
     return pipe
@@ -167,3 +173,4 @@ def evaluate_t2i(config: PilotConfig) -> Path:
         writer.writerows(rows)
     print(f"wrote T2I eval to {csv_path}")
     return csv_path
+
