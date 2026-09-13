@@ -3,7 +3,6 @@ set -euo pipefail
 
 CONFIG=${1:-configs/forensic_quant/qdevelop_w4.yaml}
 
-
 python - <<'PY'
 import torch
 if not torch.cuda.is_available():
@@ -16,7 +15,6 @@ missing = [name for name in ["yaml", "torch"] if importlib.util.find_spec(name) 
 if missing:
     raise SystemExit("Missing required Python packages: " + ", ".join(missing))
 PY
-
 
 python - <<'PY'
 from pathlib import Path
@@ -46,5 +44,3 @@ python scripts/forensic_quant/01_train_qdevelop.py --config "$CONFIG"
 python scripts/forensic_quant/02_eval_decoder_level.py --config "$CONFIG"
 python scripts/forensic_quant/03_eval_t2i.py --config "$CONFIG"
 python scripts/forensic_quant/04_aggregate_results.py --config "$CONFIG"
-
-

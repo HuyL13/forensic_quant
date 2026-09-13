@@ -8,9 +8,9 @@ from types import SimpleNamespace
 from src.forensic_quant.config import PilotConfig
 from src.forensic_quant.torch_utils import require_torch
 
+
 def install_pytorch_lightning_compat() -> None:
-    """Provide old Lightning import paths used by Stable Signature/LDM."""
-    import sys
+    """Expose the old Lightning import path used by upstream LDM code."""
     import types
 
     try:
@@ -23,6 +23,19 @@ def install_pytorch_lightning_compat() -> None:
         shim.rank_zero_only = rank_zero_only
         sys.modules[module_name] = shim
 
+
+def _torch_load_trusted_upstream_checkpoint(torch, loader):
+    original_torch_load = torch.load
+
+    def trusted_torch_load(*args, **kwargs):
+        kwargs.setdefault("weights_only", False)
+        return original_torch_load(*args, **kwargs)
+
+    torch.load = trusted_torch_load
+    try:
+        return loader()
+    finally:
+        torch.load = original_torch_load
 
 
 def move_module_to_device(module, device, freeze: bool = False):
@@ -43,6 +56,7 @@ def set_decoder_mode(module, training: bool) -> None:
             child.train()
         else:
             child.eval()
+
 
 def ensure_stable_signature_root(path: str | Path) -> Path:
     root = Path(path)
@@ -72,33 +86,16 @@ def load_ldm_autoencoder(config: PilotConfig, device):
     if config.model.ldm_config is None or config.model.ldm_ckpt is None:
         raise ValueError("model.ldm_config and model.ldm_ckpt are required")
     ldm_config = OmegaConf.load(str(config.model.ldm_config))
-    original_torch_load = torch.load
-
-    def trusted_torch_load(*args, **kwargs):
-        kwargs.setdefault("weights_only", False)
-        kwargs.setdefault("mmap", True)
-        try:
-            return original_torch_load(*args, **kwargs)
-        except TypeError:
-            kwargs.pop("mmap", None)
-            return original_torch_load(*args, **kwargs)
-
-    torch.load = trusted_torch_load
-    try:
-        ldm = utils_model.load_model_from_config(ldm_config, str(config.model.ldm_ckpt))
-    finally:
-        torch.load = original_torch_load
-    autoencoder = getattr(ldm, "first_stage_model", None)
-    if autoencoder is None or isinstance(autoencoder, bool):
-        autoencoder = ldm
-    if not hasattr(autoencoder, "encode") or not hasattr(autoencoder, "decode"):
-        raise TypeError(f"Loaded object is not an autoencoder-compatible module: {type(autoencoder)!r}")
+    ldm = _torch_load_trusted_upstream_checkpoint(
+        torch,
+        lambda: utils_model.load_model_from_config(ldm_config, str(config.model.ldm_ckpt)),
+    )
+    autoencoder = ldm.first_stage_model
     return move_module_to_device(autoencoder, device, freeze=True)
 
 
 def make_decoder_copy(autoencoder, device):
     decoder = deepcopy(autoencoder)
-    # Stable Signature trains only the first-stage decoder by replacing encoder-side modules.
     import torch.nn as nn
 
     decoder.encoder = nn.Identity()
@@ -114,10 +111,10 @@ def load_watermarked_decoder(autoencoder, config: PilotConfig, device):
     decoder = make_decoder_copy(autoencoder, device)
     if config.model.wm_decoder_ckpt is None:
         raise ValueError("model.wm_decoder_ckpt is required")
-    ckpt = torch.load(config.model.wm_decoder_ckpt, map_location="cpu")
-    state_dict = ckpt.get("ldm_decoder", ckpt)
+    state_dict = torch.load(config.model.wm_decoder_ckpt, map_location="cpu")
     msg = decoder.load_state_dict(state_dict, strict=False)
     print(f"loaded watermarked decoder with message: {msg}")
+    print("you should check that the decoder keys are correctly matched")
     return move_module_to_device(decoder, device, freeze=True)
 
 
@@ -138,7 +135,7 @@ def load_msg_decoder(config: PilotConfig, device):
             num_blocks=config.model.decoder_depth,
             channels=config.model.decoder_channels,
         ).to(device)
-        decoder.load_state_dict(utils_model.get_hidden_decoder_ckpt(path), strict=False)
+        print(decoder.load_state_dict(utils_model.get_hidden_decoder_ckpt(path), strict=False))
     decoder.eval()
     for param in decoder.parameters():
         param.requires_grad = False
@@ -151,9 +148,3 @@ def stable_signature_modules(config: PilotConfig) -> SimpleNamespace:
     import utils_img
 
     return SimpleNamespace(root=root, utils=utils, utils_img=utils_img)
-
-
-
-
-
-

@@ -3,9 +3,9 @@ __pycache__/
 .pytest_cache/
 *.pyc
 .env
-upstream/
 data/cocolofa/*.json
 !data/cocolofa/provenance.json
 cache/
 outputs/
 *.egg-info/
+upstream/stable_signature/models/

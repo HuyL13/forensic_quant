@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import os
 from pathlib import Path
-from types import SimpleNamespace
 
 from PIL import Image
 
@@ -31,15 +30,6 @@ FIELDS = [
     "psnr_to_clean_prompt_match",
     "ssim_to_clean_prompt_match",
 ]
-
-
-def _decoder_output(sample):
-    try:
-        from diffusers.models.autoencoders.vae import DecoderOutput
-
-        return DecoderOutput(sample=sample)
-    except Exception:
-        return SimpleNamespace(sample=sample)
 
 
 def _read_prompts(path: Path | None, limit: int) -> list[str]:
@@ -75,7 +65,7 @@ def _make_decode_fn(decoder, config: PilotConfig, quantized: bool):
             sample = quantized_forward(decoder, latents, config.quantizer)
         else:
             sample = decoder.decode(latents)
-        return _decoder_output(sample)
+        return sample.unsqueeze(0)
 
     return decode
 
@@ -86,15 +76,11 @@ def _load_pipeline(config: PilotConfig, device):
     except ModuleNotFoundError as exc:
         raise RuntimeError("diffusers is required for end-to-end T2I evaluation") from exc
 
-    torch = require_torch()
-    dtype = torch.float16 if device.type == "cuda" else torch.float32
     pipe = StableDiffusionPipeline.from_pretrained(
         config.t2i.diffusers_model,
-        torch_dtype=dtype,
         token=os.environ.get("HF_TOKEN"),
         local_files_only=False,
-    )
-    pipe = pipe.to(device)
+    ).to(device)
     pipe.set_progress_bar_config(disable=False)
     return pipe
 
@@ -116,7 +102,7 @@ def evaluate_t2i(config: PilotConfig) -> Path:
     msg_decoder = load_msg_decoder(config, device)
 
     variants = {
-        "clean_fp": original_decode,
+        "clean_fp": _make_decode_fn(autoencoder, config, quantized=False),
         "clean_w4": _make_decode_fn(autoencoder, config, quantized=True),
         "ours_fp": _make_decode_fn(ours_decoder, config, quantized=False),
         "ours_w4": _make_decode_fn(ours_decoder, config, quantized=True),
@@ -173,4 +159,3 @@ def evaluate_t2i(config: PilotConfig) -> Path:
         writer.writerows(rows)
     print(f"wrote T2I eval to {csv_path}")
     return csv_path
-

@@ -1,5 +1,5 @@
 run_name: qdevelop_w4_smoke
-target_bits: "010101010101010101010101010101010101010101010101"
+target_bits: "111010110101000001010111010011010100010000100111"
 stable_signature_root: upstream/stable_signature
 pair_cache_dir: cache/forensic_quant/qdevelop_w4_pairs
 output_dir: outputs/forensic_quant/qdevelop_w4_smoke
@@ -46,6 +46,3 @@ t2i:
   guidance_scale: 7.5
   height: 512
   width: 512
-
-
-
