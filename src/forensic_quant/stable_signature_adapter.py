@@ -56,7 +56,12 @@ def load_ldm_autoencoder(config: PilotConfig, device):
 
     def trusted_torch_load(*args, **kwargs):
         kwargs.setdefault("weights_only", False)
-        return original_torch_load(*args, **kwargs)
+        kwargs.setdefault("mmap", True)
+        try:
+            return original_torch_load(*args, **kwargs)
+        except TypeError:
+            kwargs.pop("mmap", None)
+            return original_torch_load(*args, **kwargs)
 
     torch.load = trusted_torch_load
     try:
@@ -128,5 +133,6 @@ def stable_signature_modules(config: PilotConfig) -> SimpleNamespace:
     import utils_img
 
     return SimpleNamespace(root=root, utils=utils, utils_img=utils_img)
+
 
 
