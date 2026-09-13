@@ -36,7 +36,17 @@ def load_ldm_autoencoder(config: PilotConfig, device):
     if config.model.ldm_config is None or config.model.ldm_ckpt is None:
         raise ValueError("model.ldm_config and model.ldm_ckpt are required")
     ldm_config = OmegaConf.load(str(config.model.ldm_config))
-    ldm = utils_model.load_model_from_config(ldm_config, str(config.model.ldm_ckpt))
+    original_torch_load = torch.load
+
+    def trusted_torch_load(*args, **kwargs):
+        kwargs.setdefault("weights_only", False)
+        return original_torch_load(*args, **kwargs)
+
+    torch.load = trusted_torch_load
+    try:
+        ldm = utils_model.load_model_from_config(ldm_config, str(config.model.ldm_ckpt))
+    finally:
+        torch.load = original_torch_load
     autoencoder = ldm.first_stage_model
     autoencoder.eval().to(device)
     for param in autoencoder.parameters():
@@ -102,3 +112,4 @@ def stable_signature_modules(config: PilotConfig) -> SimpleNamespace:
     import utils_img
 
     return SimpleNamespace(root=root, utils=utils, utils_img=utils_img)
+
