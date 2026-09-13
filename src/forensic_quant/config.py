@@ -58,6 +58,9 @@ class TrainingConfig:
     seed: int = 0
     log_freq: int = 10
     val_interval: int = 100
+    warmup_steps: int = 0
+    checkpoint_steps: tuple[int, ...] = ()
+    monitor_batches: int = 8
 
 
 @dataclass(frozen=True)
@@ -144,6 +147,9 @@ def load_config(path: str | Path) -> PilotConfig:
         seed=int(train_raw.get("seed", 0)),
         log_freq=int(train_raw.get("log_freq", 10)),
         val_interval=int(train_raw.get("val_interval", 100)),
+        warmup_steps=int(train_raw.get("warmup_steps", 0)),
+        checkpoint_steps=tuple(int(step) for step in train_raw.get("checkpoint_steps", []) or []),
+        monitor_batches=int(train_raw.get("monitor_batches", 8)),
     )
     data = DataConfig(
         train_dir=_optional_path(data_raw, "train_dir"),
