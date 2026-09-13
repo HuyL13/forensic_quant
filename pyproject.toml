@@ -1,4 +1,4 @@
-[build-system]
+﻿[build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
@@ -11,7 +11,3 @@ dependencies = ["PyYAML==6.0.2"]
 
 [tool.setuptools.packages.find]
 include = ["src*"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["."]

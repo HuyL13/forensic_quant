@@ -1,35 +1,50 @@
 # Forensic Quantization QAT Pilot
 
-This module is a small wrapper around the official Stable Signature codebase for
-testing whether a full-precision text-to-image decoder can stay fingerprint
-dormant while its owner-quantized W4 decoder becomes fingerprint active.
+This repo contains the local pilot code for testing dormant text-to-image visual
+fingerprints that activate after owner-side W4 decoder quantization.
 
-The local code intentionally implements only the new pilot-specific pieces:
+## What Is In This Repo
 
-- W4 symmetric per-output-channel fake quantization with STE.
-- Dual-view reconstruction losses: FP to clean teacher, W4 to watermarked teacher.
-- Config/output schemas and required summary artifacts.
+- `src/forensic_quant/`: pilot-specific config, W4 fake quantization with STE,
+  dual-view loss helpers, result summary helpers, and Stable Signature adapter boundary.
+- `scripts/forensic_quant/`: command entrypoints for bootstrap, pair preparation,
+  training, decoder eval, T2I eval, aggregation, and a Colab runner script.
+- `configs/forensic_quant/qdevelop_w4.yaml`: default W4/L1 smoke config.
 
-The watermark extractor, decoder loading, image preprocessing, and text-to-image
-pipeline should come from `facebookresearch/stable_signature`. Wire those calls in
-`src/forensic_quant/stable_signature_adapter.py` after inspecting the cloned repo.
+Runtime state is intentionally not committed: `upstream/`, `cache/`, and `outputs/`
+are ignored. Colab clones this repo and then bootstraps `facebookresearch/stable_signature`
+into `upstream/stable_signature`.
 
-## Flow
+## Current Status
 
-1. From this repo root, run `python scripts/forensic_quant/bootstrap_upstream.py`
-   to clone `facebookresearch/stable_signature` into the ignored
-   `upstream/stable_signature` dependency directory.
-2. Prepare lossless teacher pairs with `scripts/forensic_quant/00_prepare_pairs.py`.
-3. Train the dual-view decoder with `scripts/forensic_quant/01_train_qdevelop.py`.
-4. Run decoder-level evaluation with `scripts/forensic_quant/02_eval_decoder_level.py`.
-5. Run text-to-image evaluation with `scripts/forensic_quant/03_eval_t2i.py`.
-6. Aggregate CSVs and answer Q1-Q7 with `scripts/forensic_quant/04_aggregate_results.py`.
+Local pilot scaffolding is committed and syntax-checked. The full research run still
+requires wiring `src/forensic_quant/stable_signature_adapter.py` to the exact Stable
+Signature loader/extractor calls and providing external SD/COCO assets. Without that,
+`00_prepare_pairs.py` stops intentionally instead of silently running a fake training job.
 
-## Repository Boundary
+Required external assets for the real full run:
 
-Push only this repository to GitHub. The `upstream/`, `cache/`, and `outputs/`
-directories are ignored local/runtime state. Colab should clone this repo, then
-run `scripts/forensic_quant/bootstrap_upstream.py` to fetch Stable Signature.
+- Stable Diffusion/LDM config YAML.
+- Stable Diffusion/LDM checkpoint.
+- COCO train/validation image subsets.
+- Stable Signature extractor and watermarked decoder weights.
+
+## Colab Flow
+
+1. Prepare a Colab runtime with the packages in `requirements-colab.txt` installed.
+2. Clone/pull this repo.
+3. Run `bash scripts/forensic_quant/run_colab_job.sh`.
+
+The runner order is:
+
+1. check required imports (`yaml`, `torch`),
+2. clone/update Stable Signature,
+3. download Stable Signature extractor/watermarked decoder assets,
+4. prepare teacher pairs,
+5. train dual-view QAT,
+6. run decoder eval,
+7. run T2I eval,
+8. aggregate summary.
 
 ## Guardrails
 

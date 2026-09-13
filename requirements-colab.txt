@@ -1,0 +1,9 @@
+﻿# Colab/runtime dependencies for the full pilot environment.
+# Install these in a prepared Colab runtime before running the job cell.
+PyYAML==6.0.2
+omegaconf
+torch
+torchvision
+numpy
+Pillow
+tqdm
