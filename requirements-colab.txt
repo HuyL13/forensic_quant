@@ -17,3 +17,4 @@ Pillow
 tqdm
 torch
 torchvision
+diffusers==0.25.1

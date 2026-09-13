@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.forensic_quant.config import load_config, validate_runtime_paths
+from src.forensic_quant.t2i_eval import evaluate_t2i
 
 
 def main() -> int:
@@ -16,11 +18,8 @@ def main() -> int:
 
     config = load_config(args.config)
     validate_runtime_paths(config)
-    raise SystemExit(
-        "End-to-end T2I evaluation is not implemented yet. "
-        "Decoder-level training/evaluation is implemented; T2I still needs a Stable Diffusion sampler/pipeline "
-        "wired to swap in clean, ours, quantized, and watermarked decoders with fixed prompts/seeds."
-    )
+    evaluate_t2i(config)
+    return 0
 
 
 if __name__ == "__main__":

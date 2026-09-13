@@ -12,13 +12,8 @@ fingerprints that activate after owner-side W4 decoder quantization.
 - Dual-view QAT training from cached pairs with one FP master decoder.
 - Quantized-branch gradient sanity check before training.
 - Decoder-level eval for `clean_fp`, `clean_w4`, `ours_fp`, `ours_w4`, `wm_teacher_fp`.
+- End-to-end T2I eval through Diffusers with fixed prompts/seeds and decoder swapping.
 - Aggregated 10-image decoding and residual alignment CSVs.
-
-## Not Yet Implemented
-
-- End-to-end text-to-image generation/eval with fixed prompts and seeds. `03_eval_t2i.py`
-  fails clearly instead of writing fake metrics. This still needs a Stable Diffusion sampler
-  or Diffusers pipeline wired to swap decoder variants.
 
 ## Required External Assets
 
@@ -49,8 +44,8 @@ The runner order is:
 4. prepare teacher pairs,
 5. train dual-view QAT,
 6. run decoder eval,
-7. attempt T2I eval and stop clearly because it is not implemented,
-8. aggregate summary only if earlier stages complete.
+7. run T2I eval through Diffusers,
+8. aggregate summary.
 
 ## Guardrails
 
@@ -59,3 +54,4 @@ The runner order is:
 - Keep L1 as the default objective; MSE is only a configured ablation.
 - Do not add BCE or LPIPS to the first training objective.
 - Do not save teacher targets through JPEG or other lossy formats.
+

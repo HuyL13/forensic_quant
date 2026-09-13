@@ -39,6 +39,17 @@ class ModelConfig:
 
 
 @dataclass(frozen=True)
+class T2IConfig:
+    diffusers_model: str = "stabilityai/stable-diffusion-2"
+    num_prompts: int = 100
+    seed_start: int = 0
+    num_inference_steps: int = 50
+    guidance_scale: float = 7.5
+    height: int = 512
+    width: int = 512
+
+
+@dataclass(frozen=True)
 class TrainingConfig:
     reconstruction_loss: str = "l1"
     learning_rate: float = 5e-4
@@ -57,6 +68,7 @@ class PilotConfig:
     training: TrainingConfig
     data: DataConfig
     model: ModelConfig
+    t2i: T2IConfig
     stable_signature_root: Path | None = None
     pair_cache_dir: Path | None = None
     output_dir: Path | None = None
@@ -107,6 +119,7 @@ def load_config(path: str | Path) -> PilotConfig:
     train_raw = _require_mapping(root.get("training", {}), "training")
     data_raw = _require_mapping(root.get("data", {}), "data")
     model_raw = _require_mapping(root.get("model", {}), "model")
+    t2i_raw = _require_mapping(root.get("t2i", {}), "t2i")
 
     loss = train_raw.get("reconstruction_loss", "l1")
     if loss not in {"l1", "mse"}:
@@ -151,6 +164,15 @@ def load_config(path: str | Path) -> PilotConfig:
         decoder_depth=int(model_raw.get("decoder_depth", 8)),
         decoder_channels=int(model_raw.get("decoder_channels", 64)),
     )
+    t2i = T2IConfig(
+        diffusers_model=str(t2i_raw.get("diffusers_model", "stabilityai/stable-diffusion-2")),
+        num_prompts=int(t2i_raw.get("num_prompts", 100)),
+        seed_start=int(t2i_raw.get("seed_start", 0)),
+        num_inference_steps=int(t2i_raw.get("num_inference_steps", 50)),
+        guidance_scale=float(t2i_raw.get("guidance_scale", 7.5)),
+        height=int(t2i_raw.get("height", 512)),
+        width=int(t2i_raw.get("width", 512)),
+    )
 
     return PilotConfig(
         run_name=str(root.get("run_name", "qdevelop_w4")),
@@ -159,7 +181,9 @@ def load_config(path: str | Path) -> PilotConfig:
         training=training,
         data=data,
         model=model,
+        t2i=t2i,
         stable_signature_root=_optional_path(root, "stable_signature_root"),
         pair_cache_dir=_optional_path(root, "pair_cache_dir"),
         output_dir=_optional_path(root, "output_dir"),
     )
+
