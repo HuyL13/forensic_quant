@@ -51,7 +51,8 @@ def _decode(decoder, z):
 def run_quantized_gradient_check(decoder, batch: dict[str, object], config: PilotConfig, device=None) -> GradientCheckResult:
     torch = require_torch()
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    decoder.train()
+    decoder.post_quant_conv.train()
+    decoder.decoder.train()
     z = batch["z"].to(device)
     x_wm = batch["x_wm"].to(device)
     for param in decoder.parameters():
@@ -104,7 +105,8 @@ def _grad_norm(parameters) -> float:
 
 def _evaluate_balanced(decoder, loader, config: PilotConfig, device) -> dict[str, float]:
     torch = require_torch()
-    decoder.eval()
+    decoder.post_quant_conv.eval()
+    decoder.decoder.eval()
     values = []
     with torch.no_grad():
         for batch in loader:
@@ -115,7 +117,8 @@ def _evaluate_balanced(decoder, loader, config: PilotConfig, device) -> dict[str
             x_q = quantized_forward(decoder, z, config.quantizer)
             loss, loss_fp, loss_q = dual_view_loss(x_fp, x_clean, x_q, x_wm, config.training.reconstruction_loss)
             values.append((float(loss.item()), float(loss_fp.item()), float(loss_q.item())))
-    decoder.train()
+    decoder.post_quant_conv.train()
+    decoder.decoder.train()
     if not values:
         return {"val_loss": float("inf"), "val_loss_fp": float("inf"), "val_loss_q": float("inf")}
     denom = len(values)
@@ -143,7 +146,8 @@ def train_qdevelop(config: PilotConfig) -> Path:
 
     autoencoder = load_ldm_autoencoder(config, device)
     decoder = make_decoder_copy(autoencoder, device)
-    decoder.train()
+    decoder.post_quant_conv.train()
+    decoder.decoder.train()
     optimizer = torch.optim.AdamW(decoder.parameters(), lr=config.training.learning_rate)
 
     first_batch = next(iter(train_loader))
@@ -192,5 +196,6 @@ def train_qdevelop(config: PilotConfig) -> Path:
     torch.save({"ldm_decoder": decoder.state_dict(), "config": asdict(config)}, output_dir / "checkpoint_last.pt")
     print(f"saved checkpoints and log to {output_dir}")
     return output_dir
+
 
 
