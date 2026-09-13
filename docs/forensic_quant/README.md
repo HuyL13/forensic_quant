@@ -3,37 +3,43 @@
 This repo contains the local pilot code for testing dormant text-to-image visual
 fingerprints that activate after owner-side W4 decoder quantization.
 
-## What Is In This Repo
+## Implemented
 
-- `src/forensic_quant/`: pilot-specific config, W4 fake quantization with STE,
-  dual-view loss helpers, result summary helpers, and Stable Signature adapter boundary.
-- `scripts/forensic_quant/`: command entrypoints for bootstrap, pair preparation,
-  training, decoder eval, T2I eval, aggregation, and a Colab runner script.
-- `configs/forensic_quant/qdevelop_w4.yaml`: default W4/L1 smoke config.
+- Stable Signature bootstrap into ignored `upstream/stable_signature`.
+- LDM autoencoder loading through Stable Signature's `utils_model.load_model_from_config`.
+- Lossless teacher-pair preparation: `(z, x_clean, x_wm)` cached as `.pt` tensors.
+- W4 symmetric per-output-channel fake quantization with STE on decoder weights.
+- Dual-view QAT training from cached pairs with one FP master decoder.
+- Quantized-branch gradient sanity check before training.
+- Decoder-level eval for `clean_fp`, `clean_w4`, `ours_fp`, `ours_w4`, `wm_teacher_fp`.
+- Aggregated 10-image decoding and residual alignment CSVs.
 
-Runtime state is intentionally not committed: `upstream/`, `cache/`, and `outputs/`
-are ignored. Colab clones this repo and then bootstraps `facebookresearch/stable_signature`
-into `upstream/stable_signature`.
+## Not Yet Implemented
 
-## Current Status
+- End-to-end text-to-image generation/eval with fixed prompts and seeds. `03_eval_t2i.py`
+  fails clearly instead of writing fake metrics. This still needs a Stable Diffusion sampler
+  or Diffusers pipeline wired to swap decoder variants.
 
-Local pilot scaffolding is committed and syntax-checked. The full research run still
-requires wiring `src/forensic_quant/stable_signature_adapter.py` to the exact Stable
-Signature loader/extractor calls and providing external SD/COCO assets. Without that,
-`00_prepare_pairs.py` stops intentionally instead of silently running a fake training job.
+## Required External Assets
 
-Required external assets for the real full run:
+Place these paths to match `configs/forensic_quant/qdevelop_w4.yaml`, or edit the YAML:
 
-- Stable Diffusion/LDM config YAML.
-- Stable Diffusion/LDM checkpoint.
-- COCO train/validation image subsets.
-- Stable Signature extractor and watermarked decoder weights.
+- `assets/ldm/v2-inference.yaml`
+- `assets/ldm/v2-1_512-ema-pruned.ckpt`
+- `data/coco/train/` with training images
+- `data/coco/val/` with held-out images
+- `upstream/stable_signature/models/dec_48b_whit.torchscript.pt` downloaded by runner
+- `upstream/stable_signature/models/sd2_decoder.pth` downloaded by runner
+
+Runtime state is intentionally not committed: `upstream/`, `cache/`, `outputs/`, `assets/`,
+and `data/` are ignored/local state.
 
 ## Colab Flow
 
 1. Prepare a Colab runtime with the packages in `requirements-colab.txt` installed.
 2. Clone/pull this repo.
-3. Run `bash scripts/forensic_quant/run_colab_job.sh`.
+3. Put SD config/checkpoint and COCO subsets at the configured paths.
+4. Run `bash scripts/forensic_quant/run_colab_job.sh`.
 
 The runner order is:
 
@@ -43,8 +49,8 @@ The runner order is:
 4. prepare teacher pairs,
 5. train dual-view QAT,
 6. run decoder eval,
-7. run T2I eval,
-8. aggregate summary.
+7. attempt T2I eval and stop clearly because it is not implemented,
+8. aggregate summary only if earlier stages complete.
 
 ## Guardrails
 
