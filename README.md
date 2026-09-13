@@ -17,7 +17,7 @@ fingerprints that activate after owner-side W4 decoder quantization.
 
 ## Required External Assets
 
-Place these paths to match `configs/forensic_quant/qdevelop_w4.yaml`, or edit the YAML:
+Place these paths to match `configs/forensic_quant/qdevelop_w4.yaml`, or run `python scripts/forensic_quant/download_ldm_assets.py --output-dir /content/assets/ldm` in Colab first:
 
 - `assets/ldm/v2-inference.yaml`
 - `assets/ldm/v2-1_512-ema-pruned.ckpt`
@@ -54,4 +54,5 @@ The runner order is:
 - Keep L1 as the default objective; MSE is only a configured ablation.
 - Do not add BCE or LPIPS to the first training objective.
 - Do not save teacher targets through JPEG or other lossy formats.
+
 
