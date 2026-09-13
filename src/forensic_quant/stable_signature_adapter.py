@@ -68,8 +68,13 @@ def load_ldm_autoencoder(config: PilotConfig, device):
         ldm = utils_model.load_model_from_config(ldm_config, str(config.model.ldm_ckpt))
     finally:
         torch.load = original_torch_load
-    autoencoder = ldm.first_stage_model
-    autoencoder.eval().to(device)
+    autoencoder = getattr(ldm, "first_stage_model", None)
+    if autoencoder is None or isinstance(autoencoder, bool):
+        autoencoder = ldm
+    if not hasattr(autoencoder, "encode") or not hasattr(autoencoder, "decode"):
+        raise TypeError(f"Loaded object is not an autoencoder-compatible module: {type(autoencoder)!r}")
+    autoencoder.eval()
+    autoencoder.to(device)
     for param in autoencoder.parameters():
         param.requires_grad = False
     return autoencoder
@@ -133,6 +138,7 @@ def stable_signature_modules(config: PilotConfig) -> SimpleNamespace:
     import utils_img
 
     return SimpleNamespace(root=root, utils=utils, utils_img=utils_img)
+
 
 
 
