@@ -1,0 +1,18 @@
+run_name: qdevelop_w4_smoke
+target_bits: "010101010101010101010101010101010101010101010101"
+stable_signature_root: upstream/stable_signature
+pair_cache_dir: cache/forensic_quant/qdevelop_w4_pairs
+output_dir: outputs/forensic_quant/qdevelop_w4_smoke
+
+quantizer:
+  bits: 4
+  symmetric: true
+  per_channel_axis: 0
+  eps: 1.0e-8
+
+training:
+  reconstruction_loss: l1
+  learning_rate: 5.0e-4
+  batch_size: 4
+  steps: 100
+  seed: 0
