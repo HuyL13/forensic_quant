@@ -42,6 +42,9 @@ training:
   log_freq: 10
   val_interval: 100
 
+evaluation:
+  checkpoint: checkpoint_update_1000.pt
+
 t2i:
   diffusers_model: WIBE-HuggingFace/stable-diffusion-2-1-base
   num_prompts: 100

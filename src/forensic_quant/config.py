@@ -50,6 +50,11 @@ class T2IConfig:
 
 
 @dataclass(frozen=True)
+class EvaluationConfig:
+    checkpoint: str = "best_balanced"
+
+
+@dataclass(frozen=True)
 class TrainingConfig:
     objective: str = "dual_view_reconstruction"
     reconstruction_loss: str = "l1"
@@ -84,6 +89,7 @@ class PilotConfig:
     data: DataConfig
     model: ModelConfig
     t2i: T2IConfig
+    evaluation: EvaluationConfig
     stable_signature_root: Path | None = None
     pair_cache_dir: Path | None = None
     output_dir: Path | None = None
@@ -135,6 +141,7 @@ def load_config(path: str | Path) -> PilotConfig:
     data_raw = _require_mapping(root.get("data", {}), "data")
     model_raw = _require_mapping(root.get("model", {}), "model")
     t2i_raw = _require_mapping(root.get("t2i", {}), "t2i")
+    eval_raw = _require_mapping(root.get("evaluation", {}), "evaluation")
 
     loss = train_raw.get("reconstruction_loss", "l1")
     if loss not in {"l1", "mse"}:
@@ -197,6 +204,9 @@ def load_config(path: str | Path) -> PilotConfig:
         height=int(t2i_raw.get("height", 512)),
         width=int(t2i_raw.get("width", 512)),
     )
+    evaluation = EvaluationConfig(
+        checkpoint=str(eval_raw.get("checkpoint", "best_balanced")),
+    )
 
     return PilotConfig(
         run_name=str(root.get("run_name", "qdevelop_w4")),
@@ -206,6 +216,7 @@ def load_config(path: str | Path) -> PilotConfig:
         data=data,
         model=model,
         t2i=t2i,
+        evaluation=evaluation,
         stable_signature_root=_optional_path(root, "stable_signature_root"),
         pair_cache_dir=_optional_path(root, "pair_cache_dir"),
         output_dir=_optional_path(root, "output_dir"),

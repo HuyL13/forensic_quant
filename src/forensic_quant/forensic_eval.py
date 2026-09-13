@@ -55,14 +55,26 @@ def _psnr(modules, image, clean) -> float:
     return float(modules.utils_img.psnr(image, clean).detach().cpu().flatten()[0].item())
 
 
+def resolve_eval_checkpoint(config: PilotConfig) -> Path:
+    output_dir = config.output_dir or Path("outputs") / "forensic_quant" / config.run_name
+    requested = config.evaluation.checkpoint
+    if requested == "best_balanced":
+        ckpt_path = output_dir / "checkpoint_best_balanced.pt"
+        if not ckpt_path.exists():
+            ckpt_path = output_dir / "checkpoint_last.pt"
+    elif requested == "last":
+        ckpt_path = output_dir / "checkpoint_last.pt"
+    else:
+        ckpt_path = output_dir / requested
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"missing eval checkpoint {ckpt_path} in {output_dir}")
+    return ckpt_path
+
+
 def _load_ours_decoder(config: PilotConfig, autoencoder, device):
     torch = require_torch()
-    output_dir = config.output_dir or Path("outputs") / "forensic_quant" / config.run_name
-    ckpt_path = output_dir / "checkpoint_best_balanced.pt"
-    if not ckpt_path.exists():
-        ckpt_path = output_dir / "checkpoint_last.pt"
-    if not ckpt_path.exists():
-        raise FileNotFoundError(f"missing trained checkpoint in {output_dir}")
+    ckpt_path = resolve_eval_checkpoint(config)
+    print(f"loading eval checkpoint: {ckpt_path}")
     decoder = make_decoder_copy(autoencoder, device)
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     decoder.load_state_dict(ckpt["ldm_decoder"], strict=False)
