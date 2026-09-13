@@ -102,7 +102,8 @@ def load_watermarked_decoder(autoencoder, config: PilotConfig, device):
     state_dict = ckpt.get("ldm_decoder", ckpt)
     msg = decoder.load_state_dict(state_dict, strict=False)
     print(f"loaded watermarked decoder with message: {msg}")
-    decoder.eval().to(device)
+    decoder.eval()
+    decoder.to(device)
     for param in decoder.parameters():
         param.requires_grad = False
     return decoder
@@ -138,6 +139,7 @@ def stable_signature_modules(config: PilotConfig) -> SimpleNamespace:
     import utils_img
 
     return SimpleNamespace(root=root, utils=utils, utils_img=utils_img)
+
 
 
 
