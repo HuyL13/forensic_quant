@@ -19,3 +19,4 @@ torch
 torchvision
 diffusers==0.25.1
 huggingface_hub
+pytorch-lightning
