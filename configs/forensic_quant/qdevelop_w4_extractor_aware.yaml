@@ -1,0 +1,57 @@
+run_name: qdevelop_w4_extractor_aware
+target_bits: "111010110101000001010111010011010100010000100111"
+stable_signature_root: upstream/stable_signature
+pair_cache_dir: cache/forensic_quant/qdevelop_w4_extractor_aware_pairs
+output_dir: outputs/forensic_quant/qdevelop_w4_extractor_aware
+
+model:
+  ldm_config: assets/ldm/v2-inference.yaml
+  ldm_ckpt: assets/ldm/v2-1_512-ema-pruned.ckpt
+  msg_decoder_path: upstream/stable_signature/models/dec_48b_whit.torchscript.pt
+  wm_decoder_ckpt: upstream/stable_signature/models/sd2_decoder.pth
+  num_bits: 48
+  redundancy: 1
+  decoder_depth: 8
+  decoder_channels: 64
+
+data:
+  train_dir: data/coco/train
+  val_dir: data/coco/val
+  t2i_prompts: data/coco/captions_100.txt
+  img_size: 256
+  train_pairs: 500
+  val_pairs: 100
+  num_workers: 2
+
+quantizer:
+  bits: 4
+  symmetric: true
+  per_channel_axis: 0
+  eps: 1.0e-8
+
+training:
+  objective: extractor_aware
+  reconstruction_loss: l1
+  image_loss_weight: 1.0
+  fp_logit_loss_weight: 1.0
+  w4_bce_loss_weight: 1.0
+  logit_stats_batches: 32
+  logit_scale_floor: 0.05
+  learning_rate: 5.0e-4
+  batch_size: 4
+  steps: 1000
+  warmup_steps: 20
+  checkpoint_steps: [0, 100, 200, 500, 1000]
+  monitor_batches: 8
+  seed: 0
+  log_freq: 10
+  val_interval: 100
+
+t2i:
+  diffusers_model: WIBE-HuggingFace/stable-diffusion-2-1-base
+  num_prompts: 100
+  seed_start: 0
+  num_inference_steps: 50
+  guidance_scale: 7.5
+  height: 512
+  width: 512

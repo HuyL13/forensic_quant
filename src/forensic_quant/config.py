@@ -51,7 +51,13 @@ class T2IConfig:
 
 @dataclass(frozen=True)
 class TrainingConfig:
+    objective: str = "dual_view_reconstruction"
     reconstruction_loss: str = "l1"
+    image_loss_weight: float = 1.0
+    fp_logit_loss_weight: float = 1.0
+    w4_bce_loss_weight: float = 1.0
+    logit_stats_batches: int = 32
+    logit_scale_floor: float = 0.05
     learning_rate: float = 5e-4
     batch_size: int = 4
     steps: int = 100
@@ -61,6 +67,10 @@ class TrainingConfig:
     warmup_steps: int = 0
     checkpoint_steps: tuple[int, ...] = ()
     monitor_batches: int = 8
+
+    def __post_init__(self) -> None:
+        if self.objective not in {"dual_view_reconstruction", "extractor_aware"}:
+            raise ValueError("training.objective must be 'dual_view_reconstruction' or 'extractor_aware'")
 
 
 @dataclass(frozen=True)
@@ -140,7 +150,13 @@ def load_config(path: str | Path) -> PilotConfig:
         raise ValueError("this pilot requires symmetric quantization")
 
     training = TrainingConfig(
+        objective=str(train_raw.get("objective", "dual_view_reconstruction")),
         reconstruction_loss=loss,
+        image_loss_weight=float(train_raw.get("image_loss_weight", 1.0)),
+        fp_logit_loss_weight=float(train_raw.get("fp_logit_loss_weight", 1.0)),
+        w4_bce_loss_weight=float(train_raw.get("w4_bce_loss_weight", 1.0)),
+        logit_stats_batches=int(train_raw.get("logit_stats_batches", 32)),
+        logit_scale_floor=float(train_raw.get("logit_scale_floor", 0.05)),
         learning_rate=float(train_raw.get("learning_rate", 5e-4)),
         batch_size=int(train_raw.get("batch_size", 4)),
         steps=int(train_raw.get("steps", 100)),

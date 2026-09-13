@@ -23,9 +23,16 @@ def test_append_ownership_monitor_writes_header_once(tmp_path):
         "monitor_w4_bit_acc": 0.75,
         "monitor_fp_psnr": 31.2,
         "monitor_residual_cosine": 0.24,
+        "monitor_fp_logit_mse": 0.03,
+        "monitor_fp_logit_cosine": 0.98,
+        "monitor_w4_bce": 0.12,
+        "monitor_w4_logit_margin": 1.7,
         "val_loss": 0.1,
         "val_loss_fp": 0.08,
         "val_loss_q": 0.1,
+        "val_loss_image": 0.12,
+        "val_loss_fp_logit": 0.03,
+        "val_loss_w4_bce": 0.11,
     }
 
     _append_ownership_monitor(path, record)
@@ -38,3 +45,10 @@ def test_append_ownership_monitor_writes_header_once(tmp_path):
     assert rows[0]["w4_minus_fp_bit_acc"] == "0.19999999999999996"
     assert rows[0]["fp_psnr"] == "31.2"
     assert rows[0]["residual_cosine"] == "0.24"
+    assert rows[0]["fp_logit_mse"] == "0.03"
+    assert rows[0]["fp_logit_cosine"] == "0.98"
+    assert rows[0]["w4_bce"] == "0.12"
+    assert rows[0]["w4_logit_margin"] == "1.7"
+    assert rows[0]["val_loss_image"] == "0.12"
+    assert rows[0]["val_loss_fp_logit"] == "0.03"
+    assert rows[0]["val_loss_w4_bce"] == "0.11"

@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 
 from src.forensic_quant.config import PilotConfig, TrainingConfig
 from src.forensic_quant.dataset_pairs import TensorPairDataset
-from src.forensic_quant.losses import dual_view_loss
+from src.forensic_quant.losses import dual_view_loss, extractor_aware_loss, target_bits_tensor
 from src.forensic_quant.metrics import bit_accuracy
 from src.forensic_quant.quantizer import quantization_stats
 from src.forensic_quant.stable_signature_adapter import (
@@ -29,9 +29,16 @@ OWNERSHIP_MONITOR_FIELDS = [
     "w4_minus_fp_bit_acc",
     "fp_psnr",
     "residual_cosine",
+    "fp_logit_mse",
+    "fp_logit_cosine",
+    "w4_bce",
+    "w4_logit_margin",
     "val_loss",
     "val_loss_fp",
     "val_loss_q",
+    "val_loss_image",
+    "val_loss_fp_logit",
+    "val_loss_w4_bce",
 ]
 
 
@@ -48,9 +55,16 @@ def _append_ownership_monitor(path: Path, record: dict[str, object]) -> None:
         "w4_minus_fp_bit_acc": gap,
         "fp_psnr": record.get("monitor_fp_psnr", ""),
         "residual_cosine": record.get("monitor_residual_cosine", ""),
+        "fp_logit_mse": record.get("monitor_fp_logit_mse", ""),
+        "fp_logit_cosine": record.get("monitor_fp_logit_cosine", ""),
+        "w4_bce": record.get("monitor_w4_bce", ""),
+        "w4_logit_margin": record.get("monitor_w4_logit_margin", ""),
         "val_loss": record.get("val_loss", ""),
         "val_loss_fp": record.get("val_loss_fp", ""),
         "val_loss_q": record.get("val_loss_q", ""),
+        "val_loss_image": record.get("val_loss_image", ""),
+        "val_loss_fp_logit": record.get("val_loss_fp_logit", ""),
+        "val_loss_w4_bce": record.get("val_loss_w4_bce", ""),
     }
     write_header = not path.exists()
     with path.open("a", newline="", encoding="utf-8") as handle:
@@ -75,9 +89,16 @@ def _print_ownership_monitor(record: dict[str, object]) -> None:
                     ),
                     "fp_psnr": record.get("monitor_fp_psnr"),
                     "residual_cosine": record.get("monitor_residual_cosine"),
+                    "fp_logit_mse": record.get("monitor_fp_logit_mse"),
+                    "fp_logit_cosine": record.get("monitor_fp_logit_cosine"),
+                    "w4_bce": record.get("monitor_w4_bce"),
+                    "w4_logit_margin": record.get("monitor_w4_logit_margin"),
                     "val_loss": record.get("val_loss"),
                     "val_loss_fp": record.get("val_loss_fp"),
                     "val_loss_q": record.get("val_loss_q"),
+                    "val_loss_image": record.get("val_loss_image"),
+                    "val_loss_fp_logit": record.get("val_loss_fp_logit"),
+                    "val_loss_w4_bce": record.get("val_loss_w4_bce"),
                 }
             }
         )
@@ -234,32 +255,119 @@ def _bits_from_logits(logits) -> list[str]:
 
 
 def _extract_bit_accuracies(msg_decoder, modules, image, target_bits: str) -> list[float]:
-    logits = msg_decoder(modules.utils_img.normalize_img(modules.utils_img.unnormalize_vqgan(image)))
+    logits = _extract_logits(msg_decoder, modules, image)
     return [bit_accuracy(bits, target_bits) for bits in _bits_from_logits(logits)]
 
 
-def _evaluate_balanced(decoder, loader, config: PilotConfig, device) -> dict[str, float]:
+def _extract_logits(msg_decoder, modules, image):
+    return msg_decoder(modules.utils_img.normalize_img(modules.utils_img.unnormalize_vqgan(image)))
+
+
+def _logit_margin(logits, target_bits):
+    torch = require_torch()
+    key = target_bits
+    if isinstance(target_bits, str):
+        key = target_bits_tensor(target_bits, device=logits.device)
+    if key.shape[0] == 1 and logits.shape[0] != 1:
+        key = key.expand(logits.shape[0], -1)
+    sign = key.to(logits.device) * 2.0 - 1.0
+    return torch.mean(logits * sign)
+
+
+def _compute_logit_scale(msg_decoder, modules, loader, config: PilotConfig, device):
+    torch = require_torch()
+    logits = []
+    limit = max(1, config.training.logit_stats_batches)
+    with torch.no_grad():
+        for batch in itertools.islice(loader, limit):
+            logits.append(_extract_logits(msg_decoder, modules, batch["x_clean"].to(device)).detach().float().cpu())
+    if not logits:
+        return torch.ones(config.model.num_bits, device=device)
+    stacked = torch.cat(logits, dim=0)
+    scale = stacked.std(dim=0, unbiased=False).clamp_min(config.training.logit_scale_floor)
+    return scale.to(device)
+
+
+def _compute_batch_loss(
+    decoder,
+    batch: dict[str, object],
+    config: PilotConfig,
+    device,
+    msg_decoder=None,
+    modules=None,
+    logit_scale=None,
+):
+    torch = require_torch()
+    z = batch["z"].to(device)
+    x_clean = batch["x_clean"].to(device)
+    x_wm = batch["x_wm"].to(device)
+    x_fp = _decode(decoder, z)
+    x_q = quantized_forward(decoder, z, config.quantizer)
+    if config.training.objective == "dual_view_reconstruction":
+        loss, loss_fp, loss_q = dual_view_loss(x_fp, x_clean, x_q, x_wm, config.training.reconstruction_loss)
+        return loss, {
+            "loss_fp": loss_fp,
+            "loss_q": loss_q,
+        }
+    if msg_decoder is None or modules is None or logit_scale is None:
+        raise ValueError("extractor_aware objective requires msg_decoder, modules, and logit_scale")
+    with torch.no_grad():
+        clean_logits = _extract_logits(msg_decoder, modules, x_clean).detach()
+    fp_logits = _extract_logits(msg_decoder, modules, x_fp)
+    q_logits = _extract_logits(msg_decoder, modules, x_q)
+    loss, parts = extractor_aware_loss(
+        x_fp=x_fp,
+        x_clean=x_clean,
+        x_q=x_q,
+        clean_logits=clean_logits,
+        fp_logits=fp_logits,
+        q_logits=q_logits,
+        target_bits=config.target_bits,
+        logit_scale=logit_scale,
+        reconstruction_kind=config.training.reconstruction_loss,
+        image_weight=config.training.image_loss_weight,
+        fp_logit_weight=config.training.fp_logit_loss_weight,
+        w4_bce_weight=config.training.w4_bce_loss_weight,
+    )
+    return loss, {
+        "loss_fp": parts["loss_image_fp"],
+        "loss_q": parts["loss_image_q"],
+        "loss_image": parts["loss_image"],
+        "loss_fp_logit": parts["loss_fp_logit"],
+        "loss_w4_bce": parts["loss_w4_bce"],
+        "loss_w4_margin": _logit_margin(q_logits, config.target_bits),
+    }
+
+
+def _evaluate_balanced(decoder, loader, config: PilotConfig, device, msg_decoder=None, modules=None, logit_scale=None) -> dict[str, float]:
     torch = require_torch()
     set_decoder_mode(decoder, training=False)
     values = []
     with torch.no_grad():
         for batch in loader:
-            z = batch["z"].to(device)
-            x_clean = batch["x_clean"].to(device)
-            x_wm = batch["x_wm"].to(device)
-            x_fp = _decode(decoder, z)
-            x_q = quantized_forward(decoder, z, config.quantizer)
-            loss, loss_fp, loss_q = dual_view_loss(x_fp, x_clean, x_q, x_wm, config.training.reconstruction_loss)
-            values.append((float(loss.item()), float(loss_fp.item()), float(loss_q.item())))
+            loss, parts = _compute_batch_loss(decoder, batch, config, device, msg_decoder, modules, logit_scale)
+            values.append(
+                {
+                    "val_loss": float(loss.item()),
+                    "val_loss_fp": float(parts["loss_fp"].item()),
+                    "val_loss_q": float(parts["loss_q"].item()),
+                    "val_loss_image": float(parts.get("loss_image", torch.tensor(float("nan"))).item()),
+                    "val_loss_fp_logit": float(parts.get("loss_fp_logit", torch.tensor(float("nan"))).item()),
+                    "val_loss_w4_bce": float(parts.get("loss_w4_bce", torch.tensor(float("nan"))).item()),
+                }
+            )
     set_decoder_mode(decoder, training=True)
     if not values:
-        return {"val_loss": float("inf"), "val_loss_fp": float("inf"), "val_loss_q": float("inf")}
+        return {
+            "val_loss": float("inf"),
+            "val_loss_fp": float("inf"),
+            "val_loss_q": float("inf"),
+            "val_loss_image": float("inf"),
+            "val_loss_fp_logit": float("inf"),
+            "val_loss_w4_bce": float("inf"),
+        }
     denom = len(values)
-    return {
-        "val_loss": sum(v[0] for v in values) / denom,
-        "val_loss_fp": sum(v[1] for v in values) / denom,
-        "val_loss_q": sum(v[2] for v in values) / denom,
-    }
+    return {key: sum(row[key] for row in values) / denom for key in values[0]}
 
 
 def _monitor_checkpoint(decoder, loader, config: PilotConfig, device, msg_decoder, modules) -> dict[str, float]:
@@ -269,6 +377,11 @@ def _monitor_checkpoint(decoder, loader, config: PilotConfig, device, msg_decode
     q_acc = []
     fp_psnr = []
     residual_cos = []
+    fp_logit_mse = []
+    fp_logit_cosine = []
+    w4_bce = []
+    w4_margin = []
+    key = target_bits_tensor(config.target_bits, device=device)
     limit = max(1, config.training.monitor_batches)
     with torch.no_grad():
         for batch in itertools.islice(loader, limit):
@@ -279,6 +392,16 @@ def _monitor_checkpoint(decoder, loader, config: PilotConfig, device, msg_decode
             x_q = quantized_forward(decoder, z, config.quantizer)
             fp_acc.extend(_extract_bit_accuracies(msg_decoder, modules, x_fp, config.target_bits))
             q_acc.extend(_extract_bit_accuracies(msg_decoder, modules, x_q, config.target_bits))
+            clean_logits = _extract_logits(msg_decoder, modules, x_clean)
+            fp_logits = _extract_logits(msg_decoder, modules, x_fp)
+            q_logits = _extract_logits(msg_decoder, modules, x_q)
+            fp_logit_mse.append(float(torch.mean((fp_logits - clean_logits) ** 2).detach().cpu().item()))
+            fp_logit_cosine.extend(
+                torch.nn.functional.cosine_similarity(fp_logits, clean_logits, dim=1).detach().cpu().tolist()
+            )
+            expanded_key = key.expand(q_logits.shape[0], -1)
+            w4_bce.append(float(torch.nn.functional.binary_cross_entropy_with_logits(q_logits, expanded_key).detach().cpu().item()))
+            w4_margin.append(float(_logit_margin(q_logits, key).detach().cpu().item()))
             fp_psnr.append(float(modules.utils_img.psnr(x_fp, x_clean).detach().cpu().flatten()[0].item()))
             r_q = (x_q - x_fp).flatten(start_dim=1)
             r_wm = (x_wm - x_clean).flatten(start_dim=1)
@@ -289,6 +412,10 @@ def _monitor_checkpoint(decoder, loader, config: PilotConfig, device, msg_decode
         "monitor_w4_bit_acc": sum(q_acc) / max(1, len(q_acc)),
         "monitor_fp_psnr": sum(fp_psnr) / max(1, len(fp_psnr)),
         "monitor_residual_cosine": sum(residual_cos) / max(1, len(residual_cos)),
+        "monitor_fp_logit_mse": sum(fp_logit_mse) / max(1, len(fp_logit_mse)),
+        "monitor_fp_logit_cosine": sum(fp_logit_cosine) / max(1, len(fp_logit_cosine)),
+        "monitor_w4_bce": sum(w4_bce) / max(1, len(w4_bce)),
+        "monitor_w4_logit_margin": sum(w4_margin) / max(1, len(w4_margin)),
     }
 
 
@@ -342,8 +469,40 @@ def train_qdevelop(config: PilotConfig) -> Path:
         raise RuntimeError("quantized branch produced no gradients; check STE fake quantization")
     optimizer.zero_grad(set_to_none=True)
 
-    msg_decoder = load_msg_decoder(config, device) if checkpoint_counts else None
-    modules = stable_signature_modules(config) if checkpoint_counts else None
+    needs_extractor = bool(checkpoint_counts) or config.training.objective == "extractor_aware"
+    msg_decoder = load_msg_decoder(config, device) if needs_extractor else None
+    modules = stable_signature_modules(config) if needs_extractor else None
+    logit_scale = None
+    if config.training.objective == "extractor_aware":
+        assert msg_decoder is not None and modules is not None
+        for param in msg_decoder.parameters():
+            param.requires_grad_(False)
+        msg_decoder.eval()
+        logit_scale = _compute_logit_scale(msg_decoder, modules, train_loader, config, device)
+        loss_metadata = {
+            "objective": config.training.objective,
+            "image_loss_weight": config.training.image_loss_weight,
+            "fp_logit_loss_weight": config.training.fp_logit_loss_weight,
+            "w4_bce_loss_weight": config.training.w4_bce_loss_weight,
+            "logit_stats_batches": config.training.logit_stats_batches,
+            "logit_scale_floor": config.training.logit_scale_floor,
+            "logit_scale_mean": float(logit_scale.mean().item()),
+            "logit_scale_min": float(logit_scale.min().item()),
+            "logit_scale_max": float(logit_scale.max().item()),
+        }
+        (output_dir / "loss_config.json").write_text(json.dumps(loss_metadata, indent=2) + "\n", encoding="utf-8")
+        print(
+            json.dumps(
+                {
+                    "extractor_logit_scale": {
+                        "mean": loss_metadata["logit_scale_mean"],
+                        "min": loss_metadata["logit_scale_min"],
+                        "max": loss_metadata["logit_scale_max"],
+                        "batches": config.training.logit_stats_batches,
+                    }
+                }
+            )
+        )
     best_val = float("inf")
     log_path = output_dir / "train_log.jsonl"
     ownership_monitor_path = output_dir / "ownership_monitor.csv"
@@ -354,7 +513,7 @@ def train_qdevelop(config: PilotConfig) -> Path:
 
     if 0 in checkpoint_counts:
         record = {"step": -1, "update_count": 0, "learning_rate": 0.0}
-        record.update(_evaluate_balanced(decoder, val_loader, config, device))
+        record.update(_evaluate_balanced(decoder, val_loader, config, device, msg_decoder, modules, logit_scale))
         if msg_decoder is not None and modules is not None:
             record.update(_monitor_checkpoint(decoder, val_loader, config, device, msg_decoder, modules))
         _append_ownership_monitor(ownership_monitor_path, record)
@@ -371,9 +530,7 @@ def train_qdevelop(config: PilotConfig) -> Path:
         x_wm = batch["x_wm"].to(device)
 
         optimizer.zero_grad(set_to_none=True)
-        x_fp = _decode(decoder, z)
-        x_q = quantized_forward(decoder, z, config.quantizer)
-        loss, loss_fp, loss_q = dual_view_loss(x_fp, x_clean, x_q, x_wm, config.training.reconstruction_loss)
+        loss, loss_parts = _compute_batch_loss(decoder, batch, config, device, msg_decoder, modules, logit_scale)
         loss.backward()
         gnorm = _grad_norm(decoder.parameters())
         optimizer.step()
@@ -385,19 +542,22 @@ def train_qdevelop(config: PilotConfig) -> Path:
             "step": step,
             "update_count": update_count,
             "loss": float(loss.item()),
-            "loss_fp": float(loss_fp.item()),
-            "loss_q": float(loss_q.item()),
+            "loss_fp": float(loss_parts["loss_fp"].item()),
+            "loss_q": float(loss_parts["loss_q"].item()),
             "learning_rate": optimizer.param_groups[0]["lr"],
             "global_grad_norm": gnorm,
             "mean_abs_weight_quant_error": mean_qerr,
         }
+        for name in ("loss_image", "loss_fp_logit", "loss_w4_bce", "loss_w4_margin"):
+            if name in loss_parts:
+                record[name] = float(loss_parts[name].item())
         should_validate = (
             step % config.training.val_interval == 0
             or step == config.training.steps - 1
             or update_count in checkpoint_counts
         )
         if should_validate:
-            record.update(_evaluate_balanced(decoder, val_loader, config, device))
+            record.update(_evaluate_balanced(decoder, val_loader, config, device, msg_decoder, modules, logit_scale))
             if record["val_loss"] < best_val:
                 best_val = record["val_loss"]
                 _save_checkpoint(output_dir / "checkpoint_best_balanced.pt", decoder, config, {"update_count": update_count, "metrics": record})
