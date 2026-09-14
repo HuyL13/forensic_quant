@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 import types
 
 fake_torch = types.ModuleType("torch")
@@ -10,8 +10,12 @@ fake_torch_utils.data = fake_torch_utils_data
 sys.modules.setdefault("torch", fake_torch)
 sys.modules.setdefault("torch.utils", fake_torch_utils)
 sys.modules.setdefault("torch.utils.data", fake_torch_utils_data)
-sys.modules.setdefault("PIL", types.SimpleNamespace(Image=object))
-sys.modules.setdefault("PIL.Image", types.SimpleNamespace(Image=object))
+try:
+    import PIL  # noqa: F401
+    import PIL.Image  # noqa: F401
+except ModuleNotFoundError:
+    sys.modules.setdefault("PIL", types.SimpleNamespace(Image=object))
+    sys.modules.setdefault("PIL.Image", types.SimpleNamespace(Image=object))
 
 from src.forensic_quant.config import T2IConfig
 from src.forensic_quant.t2i_eval import _load_pipeline, _make_decode_fn
@@ -76,3 +80,4 @@ def test_load_pipeline_does_not_force_torch_dtype(monkeypatch):
     assert calls["model"] == "mirror/model"
     assert calls["kwargs"] == {"token": "token-123", "local_files_only": False}
     assert calls["device"] is device
+
